@@ -20,6 +20,9 @@ async function main() {
       ["https://www.googleapis.com/auth/calendar"]
     );
 
+    await auth.authorize();
+    console.log("Authenticated as:", serviceAccount.client_email);
+
     const calendar = google.calendar({ version: "v3", auth });
 
     // Read forecast output
