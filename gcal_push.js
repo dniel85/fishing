@@ -1,66 +1,77 @@
-const fs = require("fs");
-const crypto = require("crypto");
 const { google } = require("googleapis");
 
-const CALENDAR_ID = process.env.GCAL_CALENDAR_ID;
-const SA_JSON = JSON.parse(process.env.GCAL_SA_KEY_JSON);
-
-function stableEventId(dateStr) {
-  const hash = crypto.createHash("sha1")
-    .update(`navarre-${dateStr}`)
-    .digest("hex");
-  return `navarre-${hash}`;
-}
-
 async function main() {
-
-  if (!CALENDAR_ID) throw new Error("Missing GCAL_CALENDAR_ID");
-  if (!SA_JSON.client_email) throw new Error("Bad GCAL_SA_KEY_JSON");
-
-  const text = fs.readFileSync("forecast.txt", "utf8").trim();
-
-  const firstDateMatch = text.match(/^(\d{4}-\d{2}-\d{2})/m);
-  const dateStr = firstDateMatch ? firstDateMatch[1] : new Date().toISOString().slice(0, 10);
-
-  const auth = new google.auth.JWT({
-    email: SA_JSON.client_email,
-    key: SA_JSON.private_key,
-    scopes: ["https://www.googleapis.com/auth/calendar"],
-  });
-
-  const calendar = google.calendar({ version: "v3", auth });
-
-  const eventId = stableEventId(dateStr);
-
-  const start = new Date(`${dateStr}T06:00:00-06:00`).toISOString();
-  const end = new Date(`${dateStr}T06:15:00-06:00`).toISOString();
-
-  const event = {
-    id: eventId,
-    summary: `Navarre AM Surf/Fishing/Kayak (${dateStr})`,
-    description: text,
-    start: { dateTime: start },
-    end: { dateTime: end },
-  };
-
   try {
-    await calendar.events.get({ calendarId: CALENDAR_ID, eventId });
-    await calendar.events.update({
-      calendarId: CALENDAR_ID,
-      eventId,
-      requestBody: event,
+    console.log("Starting Google Calendar push...");
+
+    const calendarId = process.env.GCAL_CALENDAR_ID;
+    const serviceAccount = JSON.parse(process.env.GCAL_SA_KEY_JSON);
+
+    if (!calendarId) throw new Error("Missing GCAL_CALENDAR_ID");
+    if (!serviceAccount) throw new Error("Missing GCAL_SA_KEY_JSON");
+
+    const auth = new google.auth.JWT(
+      serviceAccount.client_email,
+      null,
+      serviceAccount.private_key,
+      ["https://www.googleapis.com/auth/calendar"]
+    );
+
+    const calendar = google.calendar({ version: "v3", auth });
+
+    // Read forecast output
+    const fs = require("fs");
+    const forecastText = fs.readFileSync("forecast.txt", "utf8");
+
+    // Use today's date for event title
+    const today = new Date();
+    const dateStr = today.toISOString().split("T")[0];
+
+    const start = new Date();
+    start.setHours(7, 0, 0, 0); // 7 AM local
+
+    const end = new Date(start);
+    end.setMinutes(start.getMinutes() + 15);
+
+    // Delete existing events with same summary (prevents duplicates)
+    const existing = await calendar.events.list({
+      calendarId,
+      timeMin: start.toISOString(),
+      timeMax: end.toISOString(),
+      q: "Navarre AM Surf/Fishing/Kayak",
+      singleEvents: true,
     });
-    console.log("Updated existing event");
-  } catch {
-    await calendar.events.insert({
-      calendarId: CALENDAR_ID,
-      requestBody: event,
+
+    for (const event of existing.data.items) {
+      await calendar.events.delete({
+        calendarId,
+        eventId: event.id,
+      });
+      console.log("Deleted old event:", event.id);
+    }
+
+    // Insert new event
+    const response = await calendar.events.insert({
+      calendarId,
+      requestBody: {
+        summary: `Navarre AM Surf/Fishing/Kayak (${dateStr})`,
+        description: forecastText,
+        start: {
+          dateTime: start.toISOString(),
+        },
+        end: {
+          dateTime: end.toISOString(),
+        },
+      },
     });
-    console.log("Created new event");
+
+    console.log("Event created:", response.data.id);
+    console.log("Done.");
+  } catch (err) {
+    console.error("Calendar push failed:");
+    console.error(err.response?.data || err.message || err);
+    process.exit(1);
   }
 }
 
-main().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+main();
