@@ -1,9 +1,6 @@
 const { google } = require("googleapis");
 const fs = require("fs");
 
-/* ================================
-   Fish Emoji Scale
-================================ */
 function fishScale(rating) {
   switch (rating) {
     case "Excellent": return "🐟🐟🐟🐟🐟";
@@ -14,42 +11,38 @@ function fishScale(rating) {
   }
 }
 
-/* ================================
-   Weekend Detection
-================================ */
 function isWeekend(date) {
-  const day = date.getDay();
-  return day === 0 || day === 6;
+  const d = date.getUTCDay(); // safe for YYYY-MM-DD parsing
+  return d === 0 || d === 6;
 }
 
-/* ================================
-   Basic US Federal Holiday List
-   (Simple fixed-date holidays)
-================================ */
-const usHolidays = [
-  "01-01", // New Year
-  "07-04", // Independence Day
-  "11-11", // Veterans Day
-  "12-25"  // Christmas
-];
-
+// Simple fixed-date holidays (expand later if you want full federal rules)
+const usHolidays = ["01-01", "07-04", "11-11", "12-25"];
 function isHoliday(date) {
   const mmdd = date.toISOString().slice(5, 10);
   return usHolidays.includes(mmdd);
 }
 
-/* ================================
-   Main
-================================ */
+function addDaysISO(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 async function main() {
   try {
     console.log("Starting Google Calendar push...");
 
     const calendarId = process.env.GCAL_CALENDAR_ID;
-    const serviceAccount = JSON.parse(process.env.GCAL_SA_KEY_JSON);
+    if (!calendarId) throw new Error("Missing GCAL_CALENDAR_ID");
 
-    serviceAccount.private_key =
-      serviceAccount.private_key.replace(/\\n/g, "\n");
+    const serviceAccount = JSON.parse(process.env.GCAL_SA_KEY_JSON || "{}");
+    if (!serviceAccount.client_email || !serviceAccount.private_key) {
+      throw new Error("Missing/invalid GCAL_SA_KEY_JSON");
+    }
+
+    // Fix key newlines from GitHub Secrets
+    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 
     const auth = new google.auth.JWT(
       serviceAccount.client_email,
@@ -63,31 +56,26 @@ async function main() {
 
     const calendar = google.calendar({ version: "v3", auth });
 
-    const forecastLines = fs
+    const lines = fs
       .readFileSync("forecast.txt", "utf8")
       .split("\n")
-      .filter(line => line.trim().length > 0);
+      .map(l => l.trim())
+      .filter(Boolean);
 
-    const today = new Date();
-    today.setHours(0,0,0,0);
+    // Only next 7 days (UTC-safe)
+    const todayUTC = new Date();
+    const todayISO = todayUTC.toISOString().slice(0, 10);
+    const maxISO = addDaysISO(todayISO, 7);
 
-    const next7 = new Date(today);
-    next7.setDate(today.getDate() + 7);
-
-    for (const line of forecastLines) {
-
+    for (const line of lines) {
       const dateMatch = line.match(/^(\d{4}-\d{2}-\d{2})/);
       if (!dateMatch) continue;
 
       const dateStr = dateMatch[1];
-      const dateObj = new Date(dateStr);
+      if (dateStr < todayISO || dateStr > maxISO) continue;
 
-      if (dateObj < today || dateObj > next7) continue;
-
-      /* ================================
-         Extract Fishing & Kayak
-      ================================= */
-      const fishingMatch = line.match(/Fishing:\s*(\w+)/);
+      // Extract ratings
+      const fishingMatch = line.match(/Fishing:\s*([A-Za-z']+)/);
       const fishing = fishingMatch ? fishingMatch[1] : "Fair";
 
       const kayakMatch = line.match(/Kayak:\s*(.+)$/);
@@ -95,84 +83,68 @@ async function main() {
 
       const fishDisplay = fishScale(fishing);
 
-      /* ================================
-         Color Coding
-      ================================= */
-      let colorId = "5"; // Yellow default
+      // Color coding by fishing
+      let colorId = "5"; // yellow
+      if (fishing === "Excellent") colorId = "2"; // green
+      else if (fishing === "Good") colorId = "9"; // blue
+      else if (fishing === "Poor") colorId = "11"; // red
 
-      switch (fishing) {
-        case "Excellent": colorId = "2"; break; // Green
-        case "Good": colorId = "9"; break;      // Blue
-        case "Fair": colorId = "5"; break;      // Yellow
-        case "Poor": colorId = "11"; break;     // Red
-      }
-
-      /* ================================
-         Push Alert Logic
-      ================================= */
+      // Push notification only if Perfect + weekend/holiday
+      const dateObj = new Date(dateStr + "T00:00:00Z");
       let reminders = { useDefault: false };
 
-      if (kayak === "Perfect" &&
-          (isWeekend(dateObj) || isHoliday(dateObj))) {
-
+      if (kayak === "Perfect" && (isWeekend(dateObj) || isHoliday(dateObj))) {
         reminders = {
           useDefault: false,
           overrides: [
-            { method: "popup", minutes: 180 },
-            { method: "popup", minutes: 60 }
-          ]
+            { method: "popup", minutes: 180 }, // 3 hours before
+            { method: "popup", minutes: 60 },  // 1 hour before
+          ],
         };
       }
 
-      const summary =
-        `${fishDisplay} ${kayak === "Perfect" ? "🔥" : ""} Navarre`;
+      const summary = `${fishDisplay}${kayak === "Perfect" ? " 🔥" : ""} Navarre`;
+      const description = line.replace(/Fishing:\s*[^|]+(\|)?\s*/i, "").trim();
 
-      const cleanedDescription =
-        line.replace(/Fishing:\s*[^|]+/, "").trim();
+      // Stable per-day event ID (safe chars only)
+      const eventId = `navarre-${dateStr.replace(/-/g, "")}`; // e.g. navarre-20260220
 
-      /* ================================
-         Delete Existing Bot Events
-      ================================= */
-      const existing = await calendar.events.list({
-        calendarId,
-        timeMin: new Date(dateStr + "T00:00:00Z").toISOString(),
-        timeMax: new Date(dateStr + "T23:59:59Z").toISOString(),
-        q: "Navarre",
-        singleEvents: true,
-      });
+      const requestBody = {
+        summary,
+        description,
+        colorId,
+        start: { date: dateStr },
+        end: { date: addDaysISO(dateStr, 1) }, // all-day requires end = next day
+        reminders,
+        extendedProperties: { private: { source: "navarre-bot" } }, // helpful tag
+      };
 
-      for (const event of existing.data.items) {
-        await calendar.events.delete({
+      try {
+        // Create
+        await calendar.events.insert({
           calendarId,
-          eventId: event.id,
+          eventId,
+          requestBody,
         });
+        console.log("Created:", dateStr);
+      } catch (e) {
+        const code = e?.code || e?.response?.status;
+        if (code === 409) {
+          // Exists -> Update
+          await calendar.events.update({
+            calendarId,
+            eventId,
+            requestBody,
+          });
+          console.log("Updated:", dateStr);
+        } else {
+          throw e;
+        }
       }
-
-      /* ================================
-         Create All-Day Event
-      ================================= */
-      await calendar.events.insert({
-        calendarId,
-        requestBody: {
-          summary,
-          description: cleanedDescription,
-          colorId,
-          start: { date: dateStr },
-          end: {
-            date: new Date(
-              new Date(dateStr).getTime() + 86400000
-            ).toISOString().slice(0,10)
-          },
-          reminders
-        },
-      });
-
-      console.log("Updated:", dateStr);
     }
 
-    console.log("All forecast events updated.");
-  }
-  catch (err) {
+    console.log("Done.");
+  } catch (err) {
     console.error("Calendar push failed:");
     console.error(err.response?.data || err.message || err);
     process.exit(1);
