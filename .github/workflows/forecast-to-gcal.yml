@@ -16,6 +16,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          
+      - name: Debug - list files
+        run: ls -la
 
       - name: Install Google API dependency
         run: npm install googleapis
