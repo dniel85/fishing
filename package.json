@@ -1,0 +1,8 @@
+{
+  "name": "navarre-forecast",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "googleapis": "^126.0.0"
+  }
+}
