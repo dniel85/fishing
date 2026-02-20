@@ -25,7 +25,7 @@ jobs:
           ls -la
 
       - name: Install Google API dependency
-        run: npm install googleapis
+        run: npm install
 
       - name: Generate forecast
         run: node forecast.js > forecast.txt
