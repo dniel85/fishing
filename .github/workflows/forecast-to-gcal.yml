@@ -17,7 +17,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependency
+      - name: Install Google API dependency
         run: npm install googleapis
 
       - name: Generate forecast
