@@ -27,25 +27,55 @@ async function main() {
       .split("\n")
       .filter(line => line.trim().length > 0);
 
+    const today = new Date();
+    const next7 = new Date();
+    next7.setDate(today.getDate() + 7);
+
     for (const line of forecastLines) {
-      // Extract date (YYYY-MM-DD at beginning of line)
+
       const dateMatch = line.match(/^(\d{4}-\d{2}-\d{2})/);
       if (!dateMatch) continue;
 
       const dateStr = dateMatch[1];
-      const eventDate = new Date(dateStr + "T07:00:00");
+      const eventDate = new Date(dateStr);
 
-      const endDate = new Date(eventDate);
-      endDate.setMinutes(eventDate.getMinutes() + 15);
+      // Only update next 7 days
+      if (eventDate < today || eventDate > next7) continue;
 
-      const summary = `Navarre AM Forecast`;
+      // Extract fishing rating
+      const fishingMatch = line.match(/Fishing:\s*(\w+)/);
+      const fishing = fishingMatch ? fishingMatch[1] : "Fair";
 
-      // Delete existing event for that day
+      let colorId = "5";
+      let emoji = "🌊";
+
+      switch (fishing) {
+        case "Excellent":
+          colorId = "2";
+          emoji = "🎣🔥";
+          break;
+        case "Good":
+          colorId = "9";
+          emoji = "🎣";
+          break;
+        case "Fair":
+          colorId = "5";
+          emoji = "🌊";
+          break;
+        case "Poor":
+          colorId = "11";
+          emoji = "🚫";
+          break;
+      }
+
+      const summary = `${emoji} Navarre Forecast`;
+
+      // Delete existing bot events for that day
       const existing = await calendar.events.list({
         calendarId,
         timeMin: new Date(dateStr + "T00:00:00Z").toISOString(),
         timeMax: new Date(dateStr + "T23:59:59Z").toISOString(),
-        q: "Navarre AM Forecast",
+        q: "Navarre Forecast",
         singleEvents: true,
       });
 
@@ -61,19 +91,20 @@ async function main() {
         requestBody: {
           summary,
           description: line,
+          colorId,
           start: {
-            dateTime: eventDate.toISOString(),
+            date: dateStr,   // All-day event
           },
           end: {
-            dateTime: endDate.toISOString(),
+            date: dateStr,   // All-day event (single day)
           },
         },
       });
 
-      console.log("Created event for:", dateStr);
+      console.log("Updated:", dateStr);
     }
 
-    console.log("All forecast events created.");
+    console.log("All forecast events updated.");
   } catch (err) {
     console.error("Calendar push failed:");
     console.error(err.response?.data || err.message || err);
