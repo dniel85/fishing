@@ -7,6 +7,9 @@ async function main() {
     const calendarId = process.env.GCAL_CALENDAR_ID;
     const serviceAccount = JSON.parse(process.env.GCAL_SA_KEY_JSON);
 
+    // Fix newline formatting in private key
+    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+
     if (!calendarId) throw new Error("Missing GCAL_CALENDAR_ID");
     if (!serviceAccount) throw new Error("Missing GCAL_SA_KEY_JSON");
 
