@@ -1,4 +1,5 @@
 const { google } = require("googleapis");
+const fs = require("fs");
 
 async function main() {
   try {
@@ -7,11 +8,7 @@ async function main() {
     const calendarId = process.env.GCAL_CALENDAR_ID;
     const serviceAccount = JSON.parse(process.env.GCAL_SA_KEY_JSON);
 
-    // Fix newline formatting in private key
     serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
-
-    if (!calendarId) throw new Error("Missing GCAL_CALENDAR_ID");
-    if (!serviceAccount) throw new Error("Missing GCAL_SA_KEY_JSON");
 
     const auth = new google.auth.JWT(
       serviceAccount.client_email,
@@ -21,58 +18,62 @@ async function main() {
     );
 
     await auth.authorize();
-    console.log("Authenticated as:", serviceAccount.client_email);
+    console.log("Authenticated.");
 
     const calendar = google.calendar({ version: "v3", auth });
 
-    // Read forecast output
-    const fs = require("fs");
-    const forecastText = fs.readFileSync("forecast.txt", "utf8");
+    const forecastLines = fs
+      .readFileSync("forecast.txt", "utf8")
+      .split("\n")
+      .filter(line => line.trim().length > 0);
 
-    // Use today's date for event title
-    const today = new Date();
-    const dateStr = today.toISOString().split("T")[0];
+    for (const line of forecastLines) {
+      // Extract date (YYYY-MM-DD at beginning of line)
+      const dateMatch = line.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (!dateMatch) continue;
 
-    const start = new Date();
-    start.setHours(7, 0, 0, 0); // 7 AM local
+      const dateStr = dateMatch[1];
+      const eventDate = new Date(dateStr + "T07:00:00");
 
-    const end = new Date(start);
-    end.setMinutes(start.getMinutes() + 15);
+      const endDate = new Date(eventDate);
+      endDate.setMinutes(eventDate.getMinutes() + 15);
 
-    // Delete existing events with same summary (prevents duplicates)
-    const existing = await calendar.events.list({
-      calendarId,
-      timeMin: start.toISOString(),
-      timeMax: end.toISOString(),
-      q: "Navarre AM Surf/Fishing/Kayak",
-      singleEvents: true,
-    });
+      const summary = `Navarre AM Forecast`;
 
-    for (const event of existing.data.items) {
-      await calendar.events.delete({
+      // Delete existing event for that day
+      const existing = await calendar.events.list({
         calendarId,
-        eventId: event.id,
+        timeMin: new Date(dateStr + "T00:00:00Z").toISOString(),
+        timeMax: new Date(dateStr + "T23:59:59Z").toISOString(),
+        q: "Navarre AM Forecast",
+        singleEvents: true,
       });
-      console.log("Deleted old event:", event.id);
+
+      for (const event of existing.data.items) {
+        await calendar.events.delete({
+          calendarId,
+          eventId: event.id,
+        });
+      }
+
+      await calendar.events.insert({
+        calendarId,
+        requestBody: {
+          summary,
+          description: line,
+          start: {
+            dateTime: eventDate.toISOString(),
+          },
+          end: {
+            dateTime: endDate.toISOString(),
+          },
+        },
+      });
+
+      console.log("Created event for:", dateStr);
     }
 
-    // Insert new event
-    const response = await calendar.events.insert({
-      calendarId,
-      requestBody: {
-        summary: `Navarre AM Surf/Fishing/Kayak (${dateStr})`,
-        description: forecastText,
-        start: {
-          dateTime: start.toISOString(),
-        },
-        end: {
-          dateTime: end.toISOString(),
-        },
-      },
-    });
-
-    console.log("Event created:", response.data.id);
-    console.log("Done.");
+    console.log("All forecast events created.");
   } catch (err) {
     console.error("Calendar push failed:");
     console.error(err.response?.data || err.message || err);
