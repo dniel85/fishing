@@ -23,7 +23,7 @@ function isWeekend(date) {
 }
 
 /* ============================
-   Basic US Holiday List
+   Basic US Holidays
 ============================ */
 const usHolidays = ["01-01", "07-04", "11-11", "12-25"];
 
@@ -71,11 +71,26 @@ async function main() {
 
     const calendar = google.calendar({ version: "v3", auth });
 
-    const lines = fs
+    /* ============================
+       READ + DEDUPE FORECAST
+    ============================ */
+
+    const rawLines = fs
       .readFileSync("forecast.txt", "utf8")
       .split("\n")
       .map(l => l.trim())
       .filter(Boolean);
+
+    // Deduplicate by date (keep last entry per date)
+    const dateMap = new Map();
+
+    for (const line of rawLines) {
+      const match = line.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (!match) continue;
+      dateMap.set(match[1], line);
+    }
+
+    const lines = Array.from(dateMap.values());
 
     const todayISO = new Date().toISOString().slice(0, 10);
     const maxISO = addDaysISO(todayISO, 7);
@@ -86,6 +101,7 @@ async function main() {
       if (!dateMatch) continue;
 
       const dateStr = dateMatch[1];
+
       if (dateStr < todayISO || dateStr > maxISO) continue;
 
       const fishingMatch = line.match(/Fishing:\s*([A-Za-z']+)/);
@@ -129,10 +145,6 @@ async function main() {
       const description =
         line.replace(/Fishing:\s*[^|]+(\|)?\s*/i, "").trim();
 
-      /* ============================
-         Stable Safe Event ID
-         (no hyphens)
-      ============================ */
       const eventId =
         `navarre${dateStr.replace(/-/g, "")}`;
 
@@ -150,7 +162,7 @@ async function main() {
 
       /* ============================
          UPDATE FIRST
-         INSERT ONLY IF 404
+         INSERT ONLY IF MISSING
       ============================ */
       try {
         await calendar.events.update({
