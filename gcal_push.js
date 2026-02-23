@@ -142,17 +142,50 @@ async function main() {
       /* ============================
          Stable ID (NO hyphen)
       ============================ */
-      const eventId =
-        `navarre${dateStr.replace(/-/g, "")}`;
-
-      const requestBody = {
-        summary,
-        description,
-        colorId,
-        start: { date: dateStr },
-        end: { date: addDays(dateStr, 1) },
-        reminders
-      };
+   const eventId = `navarre${dateStr.replace(/-/g, "")}`;
+   
+   const requestBody = {
+     id: eventId,   // MUST be here for insert
+     summary,
+     description,
+     colorId,
+     start: { date: dateStr },
+     end: { date: addDays(dateStr, 1) },
+     reminders
+   };
+   
+   try {
+     // Check if event exists
+     await calendar.events.get({
+       calendarId,
+       eventId
+     });
+   
+     // If it exists → update
+     await calendar.events.update({
+       calendarId,
+       eventId,
+       requestBody
+     });
+   
+     console.log("Updated:", dateStr);
+   
+   } catch (e) {
+   
+     if ((e.code || e.response?.status) === 404) {
+   
+       // If not found → insert with explicit ID
+       await calendar.events.insert({
+         calendarId,
+         requestBody
+       });
+   
+       console.log("Created:", dateStr);
+   
+     } else {
+       throw e;
+     }
+   }
 
       /* ============================
          UPDATE FIRST
