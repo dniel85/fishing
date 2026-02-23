@@ -1,6 +1,9 @@
 const { google } = require("googleapis");
 const fs = require("fs");
 
+/* ============================
+   Fish Emoji Scale
+============================ */
 function fishScale(rating) {
   switch (rating) {
     case "Excellent": return "🐟🐟🐟🐟🐟";
@@ -11,11 +14,17 @@ function fishScale(rating) {
   }
 }
 
+/* ============================
+   Weekend Detection (LOCAL)
+============================ */
 function isWeekend(date) {
-  const d = date.getUTCDay();
+  const d = date.getDay();
   return d === 0 || d === 6;
 }
 
+/* ============================
+   Simple US Holidays
+============================ */
 const usHolidays = ["01-01", "07-04", "11-11", "12-25"];
 
 function isHoliday(date) {
@@ -23,14 +32,22 @@ function isHoliday(date) {
   return usHolidays.includes(mmdd);
 }
 
-function addDaysISO(dateStr, days) {
-  const d = new Date(dateStr + "T00:00:00Z");
-  d.setUTCDate(d.getUTCDate() + days);
+/* ============================
+   Add Days Helper
+============================ */
+function addDays(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
+/* ============================
+   MAIN
+============================ */
 async function main() {
   try {
+    console.log("Starting Google Calendar push...");
+
     const calendarId = process.env.GCAL_CALENDAR_ID;
     const serviceAccount = JSON.parse(process.env.GCAL_SA_KEY_JSON || "{}");
 
@@ -45,8 +62,11 @@ async function main() {
     );
 
     await auth.authorize();
-
     const calendar = google.calendar({ version: "v3", auth });
+
+    /* ============================
+       READ + DEDUPE FORECAST
+    ============================ */
 
     const rawLines = fs.readFileSync("forecast.txt", "utf8")
       .split("\n")
@@ -58,19 +78,27 @@ async function main() {
     for (const line of rawLines) {
       const match = line.match(/^(\d{4}-\d{2}-\d{2})/);
       if (!match) continue;
-      dateMap.set(match[1], line);
+      dateMap.set(match[1], line); // keeps last entry per date
     }
 
     const lines = Array.from(dateMap.values());
 
-    const todayISO = new Date().toISOString().slice(0, 10);
-    const maxISO = addDaysISO(todayISO, 7);
+    /* ============================
+       LOCAL DATE RANGE (FIXED)
+    ============================ */
+
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    const maxDate = new Date(today);
+    maxDate.setDate(today.getDate() + 7);
 
     for (const line of lines) {
 
       const dateStr = line.match(/^(\d{4}-\d{2}-\d{2})/)[1];
+      const eventDate = new Date(dateStr + "T00:00:00");
 
-      if (dateStr < todayISO || dateStr > maxISO) continue;
+      if (eventDate < today || eventDate > maxDate) continue;
 
       const fishingMatch = line.match(/Fishing:\s*([A-Za-z']+)/);
       const fishing = fishingMatch ? fishingMatch[1] : "Fair";
@@ -80,17 +108,21 @@ async function main() {
 
       const fishDisplay = fishScale(fishing);
 
+      /* ============================
+         Color Coding
+      ============================ */
       let colorId = "5";
       if (fishing === "Excellent") colorId = "2";
       else if (fishing === "Good") colorId = "9";
       else if (fishing === "Poor") colorId = "11";
 
-      const dateObj = new Date(dateStr + "T00:00:00Z");
-
+      /* ============================
+         Push Alerts
+      ============================ */
       let reminders = { useDefault: false };
 
       if (kayak === "Perfect" &&
-          (isWeekend(dateObj) || isHoliday(dateObj))) {
+          (isWeekend(eventDate) || isHoliday(eventDate))) {
 
         reminders = {
           useDefault: false,
@@ -107,62 +139,44 @@ async function main() {
       const description =
         line.replace(/Fishing:\s*[^|]+(\|)?\s*/i, "").trim();
 
-      // Search existing events for this date
-      const existing = await calendar.events.list({
-        calendarId,
-        timeMin: new Date(dateStr + "T00:00:00Z").toISOString(),
-        timeMax: new Date(dateStr + "T23:59:59Z").toISOString(),
-        singleEvents: true,
-      });
+      /* ============================
+         Stable ID (NO hyphen)
+      ============================ */
+      const eventId =
+        `navarre${dateStr.replace(/-/g, "")}`;
 
-      // Filter only our bot events
-      const botEvents = existing.data.items.filter(e =>
-        e.extendedProperties?.private?.source === "navarre-bot"
-      );
+      const requestBody = {
+        summary,
+        description,
+        colorId,
+        start: { date: dateStr },
+        end: { date: addDays(dateStr, 1) },
+        reminders
+      };
 
-      // Delete extras if more than 1
-      if (botEvents.length > 1) {
-        for (let i = 1; i < botEvents.length; i++) {
-          await calendar.events.delete({
-            calendarId,
-            eventId: botEvents[i].id
-          });
-        }
-      }
-
-      if (botEvents.length > 0) {
-        // Update existing
+      /* ============================
+         UPDATE FIRST
+         INSERT IF MISSING
+      ============================ */
+      try {
         await calendar.events.update({
           calendarId,
-          eventId: botEvents[0].id,
-          requestBody: {
-            summary,
-            description,
-            colorId,
-            start: { date: dateStr },
-            end: { date: addDaysISO(dateStr, 1) },
-            reminders,
-            extendedProperties: {
-              private: { source: "navarre-bot" }
-            }
-          }
+          eventId,
+          requestBody
         });
-      } else {
-        // Create new
-        await calendar.events.insert({
-          calendarId,
-          requestBody: {
-            summary,
-            description,
-            colorId,
-            start: { date: dateStr },
-            end: { date: addDaysISO(dateStr, 1) },
-            reminders,
-            extendedProperties: {
-              private: { source: "navarre-bot" }
-            }
-          }
-        });
+        console.log("Updated:", dateStr);
+      }
+      catch (e) {
+        if ((e.code || e.response?.status) === 404) {
+          await calendar.events.insert({
+            calendarId,
+            eventId,
+            requestBody
+          });
+          console.log("Created:", dateStr);
+        } else {
+          throw e;
+        }
       }
     }
 
