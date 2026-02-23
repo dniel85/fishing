@@ -1,16 +1,11 @@
 name: Forecast to Google Calendar
-
 on:
   schedule:
-    - cron: "0 9 * * *"
-    - cron: "0 18 * * *"
-    - cron: "0 4 * * *" 
+    - cron: "0 * * * *"
   workflow_dispatch:
-
 concurrency:
   group: navarre-forecast
   cancel-in-progress: true
-
 jobs:
   run-forecast:
     runs-on: ubuntu-latest
