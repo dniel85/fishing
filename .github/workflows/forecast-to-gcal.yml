@@ -7,32 +7,21 @@ on:
     - cron: "0 4 * * *" 
   workflow_dispatch:
 
+concurrency:
+  group: navarre-forecast
+  cancel-in-progress: true
+
 jobs:
   run-forecast:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          
-      - name: Debug - show commit + files
-        run: |
-          git log -1 --oneline
-          echo ""
-          echo "Files:"
-          ls -la
-
-      - name: Install Google API dependency
-        run: npm install
-
-      - name: Generate forecast
-        run: node forecast.js > forecast.txt
-
-      - name: Push to Google Calendar
+      - run: npm install
+      - run: node forecast.js > forecast.txt
+      - run: node gcal_push.js
         env:
           GCAL_CALENDAR_ID: ${{ secrets.GCAL_CALENDAR_ID }}
           GCAL_SA_KEY_JSON: ${{ secrets.GCAL_SA_KEY_JSON }}
-        run: node gcal_push.js
