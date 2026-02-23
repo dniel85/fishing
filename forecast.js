@@ -108,7 +108,7 @@ async function run() {
 
     const d = data[date];
 
-    const wave = d.wave / d.count;
+    const wave = Math.max(0, (d.wave / d.count) - 0.5); // Subtract 0.5 ft for beginner-friendly conditions or edit the 0.5 value to adjust the beginner-friendly threshold
     const period = d.period / d.count;
     const wind = d.wind / d.count;
     const windDir = d.windDir / d.count;
