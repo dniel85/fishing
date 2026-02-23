@@ -1,9 +1,6 @@
 const { google } = require("googleapis");
 const fs = require("fs");
 
-/* ============================
-   Fish Emoji Scale
-============================ */
 function fishScale(rating) {
   switch (rating) {
     case "Excellent": return "🐟🐟🐟🐟🐟";
@@ -14,17 +11,10 @@ function fishScale(rating) {
   }
 }
 
-/* ============================
-   Weekend Detection (LOCAL)
-============================ */
 function isWeekend(date) {
   const d = date.getDay();
   return d === 0 || d === 6;
 }
-
-/* ============================
-   Simple US Holidays
-============================ */
 const usHolidays = ["01-01", "07-04", "11-11", "12-25"];
 
 function isHoliday(date) {
@@ -32,18 +22,13 @@ function isHoliday(date) {
   return usHolidays.includes(mmdd);
 }
 
-/* ============================
-   Add Days Helper
-============================ */
 function addDays(dateStr, days) {
   const d = new Date(dateStr + "T00:00:00");
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
-/* ============================
-   MAIN
-============================ */
+// Main
 async function main() {
   try {
     console.log("Starting Google Calendar push...");
@@ -63,11 +48,6 @@ async function main() {
 
     await auth.authorize();
     const calendar = google.calendar({ version: "v3", auth });
-
-    /* ============================
-       READ + DEDUPE FORECAST
-    ============================ */
-
     const rawLines = fs.readFileSync("forecast.txt", "utf8")
       .split("\n")
       .map(l => l.trim())
@@ -82,48 +62,26 @@ async function main() {
     }
 
     const lines = Array.from(dateMap.values());
-
-    /* ============================
-       LOCAL DATE RANGE (FIXED)
-    ============================ */
-
     const today = new Date();
     today.setHours(0,0,0,0);
-
     const maxDate = new Date(today);
     maxDate.setDate(today.getDate() + 7);
-
     for (const line of lines) {
-
       const dateStr = line.match(/^(\d{4}-\d{2}-\d{2})/)[1];
       const eventDate = new Date(dateStr + "T00:00:00");
-
       if (eventDate < today || eventDate > maxDate) continue;
-
       const fishingMatch = line.match(/Fishing:\s*([A-Za-z']+)/);
       const fishing = fishingMatch ? fishingMatch[1] : "Fair";
-
       const kayakMatch = line.match(/Kayak:\s*(.+)$/);
       const kayak = kayakMatch ? kayakMatch[1].trim() : "";
-
       const fishDisplay = fishScale(fishing);
-
-      /* ============================
-         Color Coding
-      ============================ */
       let colorId = "5";
       if (fishing === "Excellent") colorId = "2";
       else if (fishing === "Good") colorId = "9";
       else if (fishing === "Poor") colorId = "11";
-
-      /* ============================
-         Push Alerts
-      ============================ */
       let reminders = { useDefault: false };
-
       if (kayak === "Perfect" &&
           (isWeekend(eventDate) || isHoliday(eventDate))) {
-
         reminders = {
           useDefault: false,
           overrides: [
@@ -132,18 +90,11 @@ async function main() {
           ]
         };
       }
-
       const summary =
         `${fishDisplay}${kayak === "Perfect" ? " 🔥" : ""} Navarre`;
-
       const description =
         line.replace(/Fishing:\s*[^|]+(\|)?\s*/i, "").trim();
-
-      /* ============================
-         Stable ID (NO hyphen)
-      ============================ */
    const eventId = `navarre${dateStr.replace(/-/g, "")}`;
-   
    const requestBody = {
      id: eventId,   // MUST be here for insert
      summary,
@@ -153,7 +104,6 @@ async function main() {
      end: { date: addDays(dateStr, 1) },
      reminders
    };
-   
    try {
      // Check if event exists
      await calendar.events.get({
@@ -171,26 +121,16 @@ async function main() {
      console.log("Updated:", dateStr);
    
    } catch (e) {
-   
      if ((e.code || e.response?.status) === 404) {
-   
-       // If not found → insert with explicit ID
        await calendar.events.insert({
          calendarId,
          requestBody
        });
-   
        console.log("Created:", dateStr);
-   
      } else {
        throw e;
      }
    }
-
-      /* ============================
-         UPDATE FIRST
-         INSERT IF MISSING
-      ============================ */
       try {
         await calendar.events.update({
           calendarId,
@@ -220,5 +160,4 @@ async function main() {
     process.exit(1);
   }
 }
-
 main();
