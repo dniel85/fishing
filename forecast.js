@@ -1,6 +1,5 @@
 const LAT = 30.3816;
 const LON = -86.8636;
-
 const TZ = "America/Chicago";
 
 function degToCardinal(d) {
@@ -8,12 +7,13 @@ function degToCardinal(d) {
   return dirs[Math.round(d / 45) % 8];
 }
 
-function fishingScore(wave, wind, water, windDir, tideBonus) {
+function fishingScore(surf, wind, water, windDir, tideBonus) {
   let score = 100;
-  score -= wave * 10;
+
+  score -= surf * 10;
   score -= wind * 2;
 
-  // Onshore penalty
+  // Onshore wind penalty (S/SE/SW)
   if (windDir >= 135 && windDir <= 225) score -= 10;
 
   // Water temp bonus
@@ -24,15 +24,16 @@ function fishingScore(wave, wind, water, windDir, tideBonus) {
   return score;
 }
 
-function kayakScore(wave, period, wind, water, air, windDir, tideBonus) {
+function kayakScore(surf, period, wind, water, air, windDir, tideBonus) {
   let score = 100;
-  score -= wave * 12;
+
+  score -= surf * 12;
   score -= wind * 1.8;
 
-  // Onshore
+  // Onshore penalty
   if (windDir >= 135 && windDir <= 225) score -= 10;
 
-  // North illusion penalty
+  // North wind illusion penalty
   if (windDir >= 315 || windDir <= 45) {
     if (wind >= 20) score -= 18;
     else if (wind >= 15) score -= 14;
@@ -40,11 +41,11 @@ function kayakScore(wave, period, wind, water, air, windDir, tideBonus) {
     else score -= 4;
   }
 
-  // Comfort penalty
+  // Cold discomfort penalty
   if ((water + air) < 120) score -= 20;
 
   // Swell power bonus
-  score += (wave * period) / 2;
+  score += (surf * period) / 2;
 
   score += tideBonus;
 
@@ -58,9 +59,9 @@ function fishingLabel(score) {
   return "Poor";
 }
 
-function kayakLabel(wave, comfort, score) {
-  if (wave <= 1.5 && comfort >= 120) return "Perfect";
-  if (wave <= 1.5 && comfort < 120) return "Good";
+function kayakLabel(surf, comfort, score) {
+  if (surf <= 1.5 && comfort >= 120) return "Perfect";
+  if (surf <= 1.5 && comfort < 120) return "Good";
   if (score >= 85) return "Good";
   if (score >= 65) return "Fair";
   if (score >= 45) return "Not Good";
@@ -84,31 +85,49 @@ async function run() {
     const [date, time] = marine.hourly.time[i].split("T");
     const hour = parseInt(time.split(":")[0], 10);
 
+    // Only 4am–9am window
     if (hour >= 4 && hour <= 9) {
 
       if (!data[date]) {
         data[date] = {
-          wave: 0, period: 0, wind: 0,
-          windDir: 0, water: 0, air: 0,
+          wave: 0,
+          period: 0,
+          wind: 0,
+          windDir: 0,
+          water: 0,
+          air: 0,
           count: 0
         };
       }
 
+      // Convert meters → feet
       data[date].wave += marine.hourly.wave_height[i] * 3.28084;
+
       data[date].period += marine.hourly.wave_period[i];
+
+      // Convert km/h → mph
       data[date].wind += weather.hourly.wind_speed_10m[i] * 0.621371;
+
       data[date].windDir += weather.hourly.wind_direction_10m[i];
+
+      // Convert C → F
       data[date].water += marine.hourly.sea_surface_temperature[i] * 9/5 + 32;
       data[date].air += weather.hourly.temperature_2m[i] * 9/5 + 32;
+
       data[date].count++;
     }
   }
 
-    for (const date of Object.keys(data).sort()) {
+  for (const date of Object.keys(data).sort()) {
 
     const d = data[date];
 
-    const wave = Math.max(0, (d.wave / d.count) - 0.5); // Subtract 0.5 ft for beginner-friendly conditions or edit the 0.5 value to adjust the beginner-friendly threshold
+    // Raw offshore wave
+    const offshore = d.wave / d.count;
+
+    // Adjusted surf (subtract 1.0 ft)
+    const surf = Math.max(0, offshore - 1.0);
+
     const period = d.period / d.count;
     const wind = d.wind / d.count;
     const windDir = d.windDir / d.count;
@@ -118,17 +137,18 @@ async function run() {
     const comfort = water + air;
     const tideBonus = 0;
 
-    const fishScore = fishingScore(wave, wind, water, windDir, tideBonus);
-    const kayakScoreVal = kayakScore(wave, period, wind, water, air, windDir, tideBonus);
+    // Use SURF for scoring
+    const fishScore = fishingScore(surf, wind, water, windDir, tideBonus);
+    const kayakScoreVal = kayakScore(surf, period, wind, water, air, windDir, tideBonus);
 
-    const surfDisplay = wave < 1 ? "Flat" : `${wave.toFixed(1)} ft`;
+    const surfDisplay = surf < 1 ? "Flat" : `${surf.toFixed(1)} ft`;
 
     console.log(
-      `${date} | Surf: ${surfDisplay}@${period.toFixed(0)}s | ` +
+      `${date} | Surf: ${surfDisplay} | Offshore: ${offshore.toFixed(1)} ft @${period.toFixed(0)}s | ` +
       `Wind: ${wind.toFixed(0)}mph ${degToCardinal(windDir)} | ` +
       `Water: ${water.toFixed(0)}°F | Air: ${air.toFixed(0)}°F | ` +
       `Fishing: ${fishingLabel(fishScore)} | ` +
-      `Kayak: ${kayakLabel(wave, comfort, kayakScoreVal)}`
+      `Kayak: ${kayakLabel(surf, comfort, kayakScoreVal)}`
     );
   }
 }
