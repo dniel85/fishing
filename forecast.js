@@ -2,11 +2,17 @@ const LAT = 30.3816;
 const LON = -86.8636;
 const TZ = "America/Chicago";
 
+// NOAA Station for Pensacola (adjust if needed)
+const NOAA_STATION = "8729840";
+
+/* ---------------------------
+   Safe Fetch with Retry
+---------------------------- */
 async function safeFetch(url, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
       const res = await fetch(url, {
-        signal: AbortSignal.timeout(15000)
+        signal: AbortSignal.timeout(20000)
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -21,6 +27,9 @@ async function safeFetch(url, retries = 3) {
   }
 }
 
+/* ---------------------------
+   Helpers
+---------------------------- */
 function degToCardinal(d) {
   const dirs = ["N","NE","E","SE","S","SW","W","NW"];
   return dirs[Math.round(d / 45) % 8];
@@ -39,19 +48,30 @@ function airTempPenalty(air) {
 }
 
 /* ---------------------------
-   Tide Models
+   Pressure Trend (24hr)
 ---------------------------- */
-function tideMovementBonus(start, end) {
-  const change = end - start;
-  const absChange = Math.abs(change);
+function pressureTrendBonus(startPressure, endPressure) {
+  const change = endPressure - startPressure;
 
-  if (absChange < 0.1) return -8;
-  if (absChange >= 0.4) return change > 0 ? 15 : 12;
-  if (absChange >= 0.2) return change > 0 ? 10 : 8;
+  // Strong falling
+  if (change <= -2.0) return 18;
+  if (change <= -1.0) return 14;
+  if (change <= -0.5) return 10;
+  if (change < 0) return 6;
 
-  return 5;
+  // Slight rising
+  if (change < 0.5) return 2;
+
+  // Moderate rising
+  if (change < 1.5) return -8;
+
+  // Strong rising
+  return -16;
 }
 
+/* ---------------------------
+   Tide Coefficient
+---------------------------- */
 function tidalCoefficient(high, low, averageRange = 1.2) {
   const range = high - low;
   return (range / averageRange) * 100;
@@ -65,8 +85,10 @@ function tidalCoefficientBonus(coeff) {
   return -8;
 }
 
-
-function fishingScore(surf, wind, water, windDir, tideBonus, air) {
+/* ---------------------------
+   Fishing Score
+---------------------------- */
+function fishingScore(surf, wind, water, windDir, tideBonus, pressureBonus, air) {
   let score = 100;
 
   score -= surf * 10;
@@ -76,12 +98,15 @@ function fishingScore(surf, wind, water, windDir, tideBonus, air) {
   if (water >= 65 && water <= 80) score += 8;
 
   score += tideBonus;
+  score += pressureBonus;
   score += airTempPenalty(air);
 
   return score;
 }
 
-
+/* ---------------------------
+   Kayak Score
+---------------------------- */
 function kayakScore(surf, period, wind, water, air, windDir) {
   let score = 100;
 
@@ -121,7 +146,9 @@ function kayakLabel(surf, comfort, score) {
   return "Don't Go";
 }
 
-// Main
+/* ---------------------------
+   Main Runner
+---------------------------- */
 async function run() {
 
   console.log("Fetching marine & weather data...");
@@ -131,12 +158,36 @@ async function run() {
   );
 
   const weather = await safeFetch(
-    `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&hourly=wind_speed_10m,wind_direction_10m,temperature_2m&forecast_days=7&timezone=${TZ}`
+    `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&hourly=wind_speed_10m,wind_direction_10m,temperature_2m,surface_pressure&forecast_days=7&timezone=${TZ}`
   );
 
   if (!marine || !weather) {
-    console.log("API unavailable. Exiting gracefully.");
+    console.log("API unavailable.");
     return;
+  }
+
+  console.log("Fetching NOAA tide data...");
+
+  const today = new Date();
+  const start = today.toISOString().slice(0,10).replace(/-/g,"");
+  const end = start;
+
+  const tideData = await safeFetch(
+    `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=marine_app&begin_date=${start}&end_date=${end}&datum=MLLW&station=${NOAA_STATION}&time_zone=lst_ldt&units=english&interval=hilo&format=json`
+  );
+
+  let tideBonus = 0;
+
+  if (tideData && tideData.predictions) {
+    const highs = tideData.predictions.filter(p => p.type === "H").map(p => parseFloat(p.v));
+    const lows = tideData.predictions.filter(p => p.type === "L").map(p => parseFloat(p.v));
+
+    if (highs.length && lows.length) {
+      const high = Math.max(...highs);
+      const low = Math.min(...lows);
+      const coeff = tidalCoefficient(high, low);
+      tideBonus = tidalCoefficientBonus(coeff);
+    }
   }
 
   const data = {};
@@ -146,20 +197,26 @@ async function run() {
     const [date, time] = marine.hourly.time[i].split("T");
     const hour = parseInt(time.split(":")[0], 10);
 
+    if (!data[date]) {
+      data[date] = {
+        wave: 0,
+        period: 0,
+        wind: 0,
+        windDir: 0,
+        water: 0,
+        air: 0,
+        pressureStart: null,
+        pressureEnd: null,
+        count: 0
+      };
+    }
+
+    const pressure = weather.hourly.surface_pressure[i];
+
+    if (hour === 0) data[date].pressureStart = pressure;
+    if (hour === 23) data[date].pressureEnd = pressure;
+
     if (hour >= 4 && hour <= 9) {
-
-      if (!data[date]) {
-        data[date] = {
-          wave: 0,
-          period: 0,
-          wind: 0,
-          windDir: 0,
-          water: 0,
-          air: 0,
-          count: 0
-        };
-      }
-
       data[date].wave += marine.hourly.wave_height[i] * 3.28084;
       data[date].period += marine.hourly.wave_period[i];
       data[date].wind += weather.hourly.wind_speed_10m[i] * 0.621371;
@@ -173,6 +230,7 @@ async function run() {
   for (const date of Object.keys(data).sort()) {
 
     const d = data[date];
+    if (!d.count || d.pressureStart === null || d.pressureEnd === null) continue;
 
     const offshore = d.wave / d.count;
     const period = d.period / d.count;
@@ -186,19 +244,14 @@ async function run() {
     const air = d.air / d.count;
     const comfort = water + air;
 
-    const highTide = 1.8 + Math.random() * 0.5;
-    const lowTide = 0.5 + Math.random() * 0.3;
-    const coeff = tidalCoefficient(highTide, lowTide);
-    const coeffBonus = tidalCoefficientBonus(coeff);
-
-    const tideStart = 1.2 + Math.random() * 0.5;
-    const tideEnd = 1.2 + Math.random() * 0.5;
-    const movementBonus = tideMovementBonus(tideStart, tideEnd);
-
-    const tideBonus = coeffBonus + movementBonus;
+    const pressureBonus = pressureTrendBonus(
+      d.pressureStart,
+      d.pressureEnd
+    );
 
     const fishScore = fishingScore(
-      surf, wind, water, windDir, tideBonus, air
+      surf, wind, water, windDir,
+      tideBonus, pressureBonus, air
     );
 
     const kayakScoreVal = kayakScore(
