@@ -1,6 +1,9 @@
 const { google } = require("googleapis");
 const fs = require("fs");
 
+/* ============================
+   Fish Emoji Scale
+============================ */
 function fishScale(rating) {
   switch (rating) {
     case "Excellent": return "🐟🐟🐟🐟🐟";
@@ -11,24 +14,36 @@ function fishScale(rating) {
   }
 }
 
+/* ============================
+   Weekend Detection
+============================ */
 function isWeekend(date) {
-  const d = date.getUTCDay(); // safe for YYYY-MM-DD parsing
+  const d = date.getUTCDay();
   return d === 0 || d === 6;
 }
 
-// Simple fixed-date holidays (expand later if you want full federal rules)
+/* ============================
+   Basic US Holiday List
+============================ */
 const usHolidays = ["01-01", "07-04", "11-11", "12-25"];
+
 function isHoliday(date) {
   const mmdd = date.toISOString().slice(5, 10);
   return usHolidays.includes(mmdd);
 }
 
+/* ============================
+   Add Days Helper
+============================ */
 function addDaysISO(dateStr, days) {
   const d = new Date(dateStr + "T00:00:00Z");
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
+/* ============================
+   MAIN
+============================ */
 async function main() {
   try {
     console.log("Starting Google Calendar push...");
@@ -41,8 +56,8 @@ async function main() {
       throw new Error("Missing/invalid GCAL_SA_KEY_JSON");
     }
 
-    // Fix key newlines from GitHub Secrets
-    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+    serviceAccount.private_key =
+      serviceAccount.private_key.replace(/\\n/g, "\n");
 
     const auth = new google.auth.JWT(
       serviceAccount.client_email,
@@ -62,19 +77,17 @@ async function main() {
       .map(l => l.trim())
       .filter(Boolean);
 
-    // Only next 7 days (UTC-safe)
-    const todayUTC = new Date();
-    const todayISO = todayUTC.toISOString().slice(0, 10);
+    const todayISO = new Date().toISOString().slice(0, 10);
     const maxISO = addDaysISO(todayISO, 7);
 
     for (const line of lines) {
+
       const dateMatch = line.match(/^(\d{4}-\d{2}-\d{2})/);
       if (!dateMatch) continue;
 
       const dateStr = dateMatch[1];
       if (dateStr < todayISO || dateStr > maxISO) continue;
 
-      // Extract ratings
       const fishingMatch = line.match(/Fishing:\s*([A-Za-z']+)/);
       const fishing = fishingMatch ? fishingMatch[1] : "Fair";
 
@@ -83,68 +96,90 @@ async function main() {
 
       const fishDisplay = fishScale(fishing);
 
-      // Color coding by fishing
-      let colorId = "5"; // yellow
-      if (fishing === "Excellent") colorId = "2"; // green
-      else if (fishing === "Good") colorId = "9"; // blue
-      else if (fishing === "Poor") colorId = "11"; // red
+      /* ============================
+         Color Coding
+      ============================ */
+      let colorId = "5";
+      if (fishing === "Excellent") colorId = "2";
+      else if (fishing === "Good") colorId = "9";
+      else if (fishing === "Poor") colorId = "11";
 
-      // Push notification only if Perfect + weekend/holiday
+      /* ============================
+         Push Notification Logic
+      ============================ */
       const dateObj = new Date(dateStr + "T00:00:00Z");
+
       let reminders = { useDefault: false };
 
-      if (kayak === "Perfect" && (isWeekend(dateObj) || isHoliday(dateObj))) {
+      if (kayak === "Perfect" &&
+          (isWeekend(dateObj) || isHoliday(dateObj))) {
+
         reminders = {
           useDefault: false,
           overrides: [
-            { method: "popup", minutes: 180 }, // 3 hours before
-            { method: "popup", minutes: 60 },  // 1 hour before
-          ],
+            { method: "popup", minutes: 180 },
+            { method: "popup", minutes: 60 }
+          ]
         };
       }
 
-      const summary = `${fishDisplay}${kayak === "Perfect" ? " 🔥" : ""} Navarre`;
-      const description = line.replace(/Fishing:\s*[^|]+(\|)?\s*/i, "").trim();
+      const summary =
+        `${fishDisplay}${kayak === "Perfect" ? " 🔥" : ""} Navarre`;
 
-      // Stable per-day event ID (safe chars only)
-      const eventId = `navarre-${dateStr.replace(/-/g, "")}`; // e.g. navarre-20260220
+      const description =
+        line.replace(/Fishing:\s*[^|]+(\|)?\s*/i, "").trim();
+
+      /* ============================
+         Stable Safe Event ID
+         (no hyphens)
+      ============================ */
+      const eventId =
+        `navarre${dateStr.replace(/-/g, "")}`;
 
       const requestBody = {
         summary,
         description,
         colorId,
         start: { date: dateStr },
-        end: { date: addDaysISO(dateStr, 1) }, // all-day requires end = next day
+        end: { date: addDaysISO(dateStr, 1) },
         reminders,
-        extendedProperties: { private: { source: "navarre-bot" } }, // helpful tag
+        extendedProperties: {
+          private: { source: "navarre-bot" }
+        }
       };
 
+      /* ============================
+         UPDATE FIRST
+         INSERT ONLY IF 404
+      ============================ */
       try {
-        // Create
-        await calendar.events.insert({
+        await calendar.events.update({
           calendarId,
           eventId,
           requestBody,
         });
-        console.log("Created:", dateStr);
-      } catch (e) {
+        console.log("Updated:", dateStr);
+      }
+      catch (e) {
         const code = e?.code || e?.response?.status;
-        if (code === 409) {
-          // Exists -> Update
-          await calendar.events.update({
+
+        if (code === 404) {
+          await calendar.events.insert({
             calendarId,
             eventId,
             requestBody,
           });
-          console.log("Updated:", dateStr);
-        } else {
+          console.log("Created:", dateStr);
+        }
+        else {
           throw e;
         }
       }
     }
 
     console.log("Done.");
-  } catch (err) {
+  }
+  catch (err) {
     console.error("Calendar push failed:");
     console.error(err.response?.data || err.message || err);
     process.exit(1);
