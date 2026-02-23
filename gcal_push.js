@@ -91,7 +91,7 @@ async function main() {
         };
       }
       const summary =
-        `${fishDisplay}${kayak === "Perfect" ? " 🔥" : ""} Navarre`;
+        `${fishDisplay}${kayak === "Perfect" ? " 🔥" : ""}`;
       const description =
         line.replace(/Fishing:\s*[^|]+(\|)?\s*/i, "").trim();
    const eventId = `navarre${dateStr.replace(/-/g, "")}`;
