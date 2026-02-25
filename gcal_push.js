@@ -73,7 +73,7 @@ async function main() {
         (surfHeight ? ` 🌊${surfHeight}` : "") +
         (hazard ? ` ⚠️${hazard}` : "");
 
-      const eventId = `forecast-${dateStr.replace(/-/g, "")}`;
+      const eventId = `forecast${dateStr.replace(/-/g, "")}`;
 
       const requestBody = {
         id: eventId,
