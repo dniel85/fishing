@@ -226,37 +226,53 @@ function fishingLabel(score, offshore, period, windDir, wind) {
   return label;
 }
 
-function kayakLabel(surf, offshore, period, comfort, score, windDir, wind) {
-  let label = "Don't Go";
+function kayakDifficultyLabel(surf, offshore, period, comfort, score, windDir, wind) {
+  let label = "Extreme";
 
-  if (surf <= 1.0 && offshore <= 0.5 && period >= 7 && comfort >= 120 && wind < 10) {
-    label = "Perfect";
-  } else if (score >= 85) {
-    label = "Good";
-  } else if (score >= 65) {
-    label = "Fair";
-  } else if (score >= 45) {
-    label = "Not Good";
-  } else {
-    label = "Don't Go";
+  // Start from score buckets
+  if (score >= 90) label = "Easy";
+  else if (score >= 78) label = "Moderate";
+  else if (score >= 66) label = "Challenging";
+  else if (score >= 54) label = "Difficult";
+  else if (score >= 42) label = "Very Difficult";
+  else label = "Extreme";
+
+  // Hard overrides for rough conditions
+  if (offshore > 1.5) return "Extreme";
+  if (offshore > 1.0) return "Very Difficult";
+  if (offshore > 0.75 && (label === "Easy" || label === "Moderate")) {
+    label = "Challenging";
   }
 
-  // Hard caps based on offshore wave height
-  if (offshore > 1.0) return "Don't Go";
-  if (offshore > 0.5 && (label === "Perfect" || label === "Good")) {
-    label = "Fair";
-  }
-
-  // East wind and short period are extra bad for kayaks
+  // East wind + short period makes small surf feel worse
   if (windDir >= 45 && windDir <= 135 && period <= 6) {
-    if (label === "Perfect") label = "Good";
-    else if (label === "Good") label = "Fair";
-    else if (label === "Fair") label = "Not Good";
+    if (label === "Easy") label = "Challenging";
+    else if (label === "Moderate") label = "Challenging";
+    else if (label === "Challenging") label = "Difficult";
+    else if (label === "Difficult") label = "Very Difficult";
+  }
+
+  // Strong wind bumps difficulty
+  if (wind >= 18) {
+    if (label === "Easy") label = "Challenging";
+    else if (label === "Moderate") label = "Difficult";
+    else if (label === "Challenging") label = "Very Difficult";
+    else label = "Extreme";
+  } else if (wind >= 12) {
+    if (label === "Easy") label = "Moderate";
+    else if (label === "Moderate") label = "Challenging";
+    else if (label === "Challenging") label = "Difficult";
+  }
+
+  // Cold water + air makes it more demanding
+  if (comfort < 120) {
+    if (label === "Easy") label = "Moderate";
+    else if (label === "Moderate") label = "Challenging";
+    else if (label === "Challenging") label = "Difficult";
   }
 
   return label;
 }
-
 /* ---------------------------
    Main Runner
 ---------------------------- */
@@ -368,7 +384,7 @@ async function run() {
       `Wind: ${wind.toFixed(0)}mph ${degToCardinal(windDir)} | ` +
       `Water: ${water.toFixed(0)}°F | Air: ${air.toFixed(0)}°F | ` +
       `Fishing: ${fishingLabel(fishScore, offshore, period, windDir, wind)} | ` +
-      `Kayak: ${kayakLabel(surf, offshore, period, comfort, kayakScoreVal, windDir, wind)}`
+      `Kayak difficulty: ${kayakDifficultyLabel(surf, offshore, period, comfort, kayakScoreVal, windDir, wind)}`
     );
   }
 }
