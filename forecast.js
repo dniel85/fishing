@@ -47,7 +47,6 @@ function airTempPenalty(air) {
   return 0;
 }
 
-// Better directional averaging
 function averageWindDirection(directions) {
   let x = 0;
   let y = 0;
@@ -63,24 +62,19 @@ function averageWindDirection(directions) {
   return avg;
 }
 
-// Any east wind should hurt.
-// Stronger penalty for ENE/E/ESE and higher speeds.
 function eastWindPenalty(windDir, windSpeed) {
   if (windDir < 45 || windDir > 135) return 0;
 
-  let penalty = 8; // any east component hurts
+  let penalty = 8;
 
-  // stronger for direct east
   if (windDir >= 70 && windDir <= 110) penalty += 5;
 
-  // stronger when it is blowing harder
   if (windSpeed >= 15) penalty += 6;
   else if (windSpeed >= 10) penalty += 3;
 
   return penalty;
 }
 
-// Short-period chop usually feels worse than raw wave height suggests
 function shortPeriodPenalty(period) {
   if (period <= 4) return 14;
   if (period <= 5) return 10;
@@ -89,8 +83,6 @@ function shortPeriodPenalty(period) {
   return 0;
 }
 
-// Convert offshore wave height into a more realistic surf/chop estimate
-// for your area without letting long period magically erase bad conditions.
 function estimateSurfHeight(offshore, period) {
   let factor = 0.85;
 
@@ -100,6 +92,43 @@ function estimateSurfHeight(offshore, period) {
   else factor = 0.85;
 
   return offshore * factor;
+}
+
+/* ---------------------------
+   Comfort Model
+---------------------------- */
+function airComfortPenalty(air) {
+  if (air < 45) return 30;
+  if (air < 55) return 18;
+  if (air < 65) return 10;
+  if (air > 97) return 18;
+  if (air > 92) return 10;
+  if (air > 88) return 4;
+  return 0;
+}
+
+function waterComfortPenalty(water) {
+  if (water < 55) return 20;
+  if (water < 62) return 12;
+  if (water < 68) return 6;
+  if (water > 88) return 4;
+  return 0;
+}
+
+function windComfortPenalty(wind) {
+  if (wind >= 20) return 18;
+  if (wind >= 15) return 12;
+  if (wind >= 10) return 6;
+  return 0;
+}
+
+function kayakComfortScore(air, water, wind) {
+  const score = 100
+    - airComfortPenalty(air)
+    - waterComfortPenalty(water)
+    - windComfortPenalty(wind);
+
+  return Math.max(0, Math.min(100, score));
 }
 
 /* ---------------------------
@@ -141,20 +170,14 @@ function tidalCoefficientBonus(coeff) {
 function fishingScore(surf, offshore, period, wind, water, windDir, tideBonus, pressureBonus, air) {
   let score = 100;
 
-  // base conditions
   score -= surf * 12;
   score -= offshore * 14;
   score -= wind * 2.2;
 
-  // east wind penalty
   score -= eastWindPenalty(windDir, wind);
-
-  // short-period chop penalty
   score -= shortPeriodPenalty(period);
 
-  // direct south wind penalty still useful for local conditions
   if (windDir >= 135 && windDir <= 225) score -= 8;
-
   if (water >= 65 && water <= 80) score += 8;
 
   score += tideBonus;
@@ -174,13 +197,9 @@ function kayakScore(surf, offshore, period, wind, water, air, windDir) {
   score -= offshore * 16;
   score -= wind * 2.2;
 
-  // any east wind hurts kayak comfort/safety
   score -= eastWindPenalty(windDir, wind);
-
-  // short, steep period is bad for kayak
   score -= shortPeriodPenalty(period) * 1.2;
 
-  // north wind handling
   if (windDir >= 315 || windDir <= 45) {
     if (wind >= 20) score -= 18;
     else if (wind >= 15) score -= 14;
@@ -188,15 +207,13 @@ function kayakScore(surf, offshore, period, wind, water, air, windDir) {
     else score -= 4;
   }
 
-  if ((water + air) < 120) score -= 20;
-
   score += airTempPenalty(air);
 
   return Math.max(0, Math.min(100, score));
 }
 
 /* ---------------------------
-   Label Logic
+   Labels
 ---------------------------- */
 function fishingLabel(score, offshore, period, windDir, wind) {
   let label = "Poor";
@@ -206,19 +223,16 @@ function fishingLabel(score, offshore, period, windDir, wind) {
   else if (score >= 45) label = "Fair";
   else label = "Poor";
 
-  // Hard caps based on offshore wave height
   if (offshore > 1.0) return "Poor";
   if (offshore > 0.5 && (label === "Excellent" || label === "Good")) {
     label = "Fair";
   }
 
-  // East wind + short period should never look "great"
   if (windDir >= 45 && windDir <= 135 && period <= 6) {
     if (label === "Excellent") label = "Fair";
     else if (label === "Good") label = "Fair";
   }
 
-  // Strong east wind should force it down further
   if (eastWindPenalty(windDir, wind) >= 13 && label === "Fair") {
     label = "Poor";
   }
@@ -226,10 +240,10 @@ function fishingLabel(score, offshore, period, windDir, wind) {
   return label;
 }
 
-function kayakComfortLabel(surf, offshore, period, comfort, score, windDir, wind) {
+function kayakComfortLabel(surf, offshore, period, comfortScore, score, windDir, wind, air) {
   let label = "Miserable";
 
-  // Base score buckets
+  // Base from kayak score
   if (score >= 85) label = "Perfect";
   else if (score >= 70) label = "Comfortable";
   else if (score >= 55) label = "Bumpy";
@@ -237,16 +251,15 @@ function kayakComfortLabel(surf, offshore, period, comfort, score, windDir, wind
   else if (score >= 30) label = "Very Sporty";
   else label = "Miserable";
 
-  // Hard overrides for rough offshore conditions
-  if (offshore > 1.5) return "Miserable";
-  if (offshore > 1.0) return "Very Sporty";
-
-  if (offshore > 0.75) {
+  // Offshore hard overrides
+  if (offshore > 1.5) label = "Miserable";
+  else if (offshore > 1.0) label = "Very Sporty";
+  else if (offshore > 0.75) {
     if (label === "Perfect") label = "Bumpy";
     else if (label === "Comfortable") label = "Bumpy";
   }
 
-  // East wind + short period makes it feel worse
+  // East wind + short period downgrade
   if (windDir >= 45 && windDir <= 135 && period <= 6) {
     if (label === "Perfect") label = "Bumpy";
     else if (label === "Comfortable") label = "Bumpy";
@@ -255,7 +268,7 @@ function kayakComfortLabel(surf, offshore, period, comfort, score, windDir, wind
     else label = "Miserable";
   }
 
-  // Strong wind bumps comfort downward
+  // Wind downgrade
   if (wind >= 18) {
     if (label === "Perfect") label = "Sporty";
     else if (label === "Comfortable") label = "Sporty";
@@ -267,15 +280,27 @@ function kayakComfortLabel(surf, offshore, period, comfort, score, windDir, wind
     else if (label === "Bumpy") label = "Sporty";
   }
 
-  // Cold conditions reduce comfort
-  if (comfort < 120) {
+  // Dynamic comfort downgrade
+  if (comfortScore < 35) {
+    if (label === "Perfect") label = "Bumpy";
+    else if (label === "Comfortable") label = "Sporty";
+    else if (label === "Bumpy") label = "Very Sporty";
+    else label = "Miserable";
+  } else if (comfortScore < 50) {
     if (label === "Perfect") label = "Comfortable";
     else if (label === "Comfortable") label = "Bumpy";
     else if (label === "Bumpy") label = "Sporty";
   }
 
+  // Temperature suffix
+  if (air <= 45) return `${label} and Very Cold`;
+  if (air <= 55) return `${label} and Cold`;
+  if (air >= 98) return `${label} and Extremely Hot`;
+  if (air >= 92) return `${label} and Very Hot`;
+
   return label;
 }
+
 /* ---------------------------
    Main Runner
 ---------------------------- */
@@ -298,7 +323,7 @@ async function run() {
   console.log("Fetching NOAA tide data...");
 
   const today = new Date();
-  const start = today.toISOString().slice(0,10).replace(/-/g,"");
+  const start = today.toISOString().slice(0, 10).replace(/-/g, "");
   const end = start;
 
   const tideData = await safeFetch(
@@ -367,7 +392,7 @@ async function run() {
     const windDir = averageWindDirection(d.windDirs);
     const water = d.water / d.count;
     const air = d.air / d.count;
-    const comfort = water + air;
+    const comfortScore = kayakComfortScore(air, water, wind);
 
     const pressureBonus = pressureTrendBonus(d.pressureStart, d.pressureEnd);
 
@@ -380,15 +405,17 @@ async function run() {
       surf, offshore, period, wind, water, air, windDir
     );
 
-    const surfDisplay = surf < 1 ? `${surf.toFixed(1)} ft` : `${surf.toFixed(1)} ft`;
+    const surfDisplay = `${surf.toFixed(1)} ft`;
 
     console.log(
       `${date} | Surf: ${surfDisplay} | Offshore: ${offshore.toFixed(1)} ft @${period.toFixed(0)}s | ` +
       `Wind: ${wind.toFixed(0)}mph ${degToCardinal(windDir)} | ` +
       `Water: ${water.toFixed(0)}°F | Air: ${air.toFixed(0)}°F | ` +
       `Fishing: ${fishingLabel(fishScore, offshore, period, windDir, wind)} | ` +
-      `Kayak comfort: ${kayakDifficultyLabel(surf, offshore, period, comfort, kayakScoreVal, windDir, wind)}`
+      `Kayak comfort: ${kayakComfortLabel(surf, offshore, period, comfortScore, kayakScoreVal, windDir, wind, air)}`
     );
+
+    
   }
 }
 
