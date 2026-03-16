@@ -249,8 +249,8 @@ function kayakLabel(surf, offshore, period, comfort, score, windDir, wind) {
 
   // East wind and short period are extra bad for kayaks
   if (windDir >= 45 && windDir <= 135 && period <= 6) {
-    if (label === "Perfect") label = "Not Good";
-    else if (label === "Good") label = "Not Good";
+    if (label === "Perfect") label = "Good";
+    else if (label === "Good") label = "Fair";
     else if (label === "Fair") label = "Not Good";
   }
 
