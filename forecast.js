@@ -2,7 +2,7 @@ const LAT = 30.3816;
 const LON = -86.8636;
 const TZ = "America/Chicago";
 
-// NOAA Station for Pensacola (adjust if needed)
+// NOAA Station for Pensacola
 const NOAA_STATION = "8729840";
 
 /* ---------------------------
@@ -47,25 +47,75 @@ function airTempPenalty(air) {
   return 0;
 }
 
+// Better directional averaging
+function averageWindDirection(directions) {
+  let x = 0;
+  let y = 0;
+
+  for (const deg of directions) {
+    const rad = deg * Math.PI / 180;
+    x += Math.cos(rad);
+    y += Math.sin(rad);
+  }
+
+  let avg = Math.atan2(y, x) * 180 / Math.PI;
+  if (avg < 0) avg += 360;
+  return avg;
+}
+
+// Any east wind should hurt.
+// Stronger penalty for ENE/E/ESE and higher speeds.
+function eastWindPenalty(windDir, windSpeed) {
+  if (windDir < 45 || windDir > 135) return 0;
+
+  let penalty = 8; // any east component hurts
+
+  // stronger for direct east
+  if (windDir >= 70 && windDir <= 110) penalty += 5;
+
+  // stronger when it is blowing harder
+  if (windSpeed >= 15) penalty += 6;
+  else if (windSpeed >= 10) penalty += 3;
+
+  return penalty;
+}
+
+// Short-period chop usually feels worse than raw wave height suggests
+function shortPeriodPenalty(period) {
+  if (period <= 4) return 14;
+  if (period <= 5) return 10;
+  if (period <= 6) return 6;
+  if (period <= 7) return 3;
+  return 0;
+}
+
+// Convert offshore wave height into a more realistic surf/chop estimate
+// for your area without letting long period magically erase bad conditions.
+function estimateSurfHeight(offshore, period) {
+  let factor = 0.85;
+
+  if (period >= 10) factor = 1.15;
+  else if (period >= 8) factor = 1.0;
+  else if (period >= 6) factor = 0.9;
+  else factor = 0.85;
+
+  return offshore * factor;
+}
+
 /* ---------------------------
    Pressure Trend (24hr)
 ---------------------------- */
 function pressureTrendBonus(startPressure, endPressure) {
   const change = endPressure - startPressure;
 
-  // Strong falling
   if (change <= -2.0) return 18;
   if (change <= -1.0) return 14;
   if (change <= -0.5) return 10;
   if (change < 0) return 6;
 
-  // Slight rising
   if (change < 0.5) return 2;
-
-  // Moderate rising
   if (change < 1.5) return -8;
 
-  // Strong rising
   return -16;
 }
 
@@ -88,33 +138,49 @@ function tidalCoefficientBonus(coeff) {
 /* ---------------------------
    Fishing Score
 ---------------------------- */
-function fishingScore(surf, wind, water, windDir, tideBonus, pressureBonus, air) {
+function fishingScore(surf, offshore, period, wind, water, windDir, tideBonus, pressureBonus, air) {
   let score = 100;
 
-  score -= surf * 10;
-  score -= wind * 2;
+  // base conditions
+  score -= surf * 12;
+  score -= offshore * 14;
+  score -= wind * 2.2;
 
-  if (windDir >= 135 && windDir <= 225) score -= 10;
+  // east wind penalty
+  score -= eastWindPenalty(windDir, wind);
+
+  // short-period chop penalty
+  score -= shortPeriodPenalty(period);
+
+  // direct south wind penalty still useful for local conditions
+  if (windDir >= 135 && windDir <= 225) score -= 8;
+
   if (water >= 65 && water <= 80) score += 8;
 
   score += tideBonus;
   score += pressureBonus;
   score += airTempPenalty(air);
 
-  return score;
+  return Math.max(0, Math.min(100, score));
 }
 
 /* ---------------------------
    Kayak Score
 ---------------------------- */
-function kayakScore(surf, period, wind, water, air, windDir) {
+function kayakScore(surf, offshore, period, wind, water, air, windDir) {
   let score = 100;
 
-  score -= surf * 12;
-  score -= wind * 1.8;
+  score -= surf * 14;
+  score -= offshore * 16;
+  score -= wind * 2.2;
 
-  if (windDir >= 135 && windDir <= 225) score -= 10;
+  // any east wind hurts kayak comfort/safety
+  score -= eastWindPenalty(windDir, wind);
 
+  // short, steep period is bad for kayak
+  score -= shortPeriodPenalty(period) * 1.2;
+
+  // north wind handling
   if (windDir >= 315 || windDir <= 45) {
     if (wind >= 20) score -= 18;
     else if (wind >= 15) score -= 14;
@@ -124,33 +190,77 @@ function kayakScore(surf, period, wind, water, air, windDir) {
 
   if ((water + air) < 120) score -= 20;
 
-  score += (surf * period) / 2;
   score += airTempPenalty(air);
 
-  return score;
+  return Math.max(0, Math.min(100, score));
 }
 
-function fishingLabel(score) {
-  if (score >= 85) return "Excellent";
-  if (score >= 65) return "Good";
-  if (score >= 45) return "Fair";
-  return "Poor";
+/* ---------------------------
+   Label Logic
+---------------------------- */
+function fishingLabel(score, offshore, period, windDir, wind) {
+  let label = "Poor";
+
+  if (score >= 85) label = "Excellent";
+  else if (score >= 65) label = "Good";
+  else if (score >= 45) label = "Fair";
+  else label = "Poor";
+
+  // Hard caps based on offshore wave height
+  if (offshore > 1.0) return "Poor";
+  if (offshore > 0.5 && (label === "Excellent" || label === "Good")) {
+    label = "Fair";
+  }
+
+  // East wind + short period should never look "great"
+  if (windDir >= 45 && windDir <= 135 && period <= 6) {
+    if (label === "Excellent") label = "Fair";
+    else if (label === "Good") label = "Fair";
+  }
+
+  // Strong east wind should force it down further
+  if (eastWindPenalty(windDir, wind) >= 13 && label === "Fair") {
+    label = "Poor";
+  }
+
+  return label;
 }
 
-function kayakLabel(surf, comfort, score) {
-  if (surf <= 1.5 && comfort >= 120) return "Perfect";
-  if (surf <= 1.5 && comfort < 120) return "Good";
-  if (score >= 85) return "Good";
-  if (score >= 65) return "Fair";
-  if (score >= 45) return "Not Good";
-  return "Don't Go";
+function kayakLabel(surf, offshore, period, comfort, score, windDir, wind) {
+  let label = "Don't Go";
+
+  if (surf <= 1.0 && offshore <= 0.5 && period >= 7 && comfort >= 120 && wind < 10) {
+    label = "Perfect";
+  } else if (score >= 85) {
+    label = "Good";
+  } else if (score >= 65) {
+    label = "Fair";
+  } else if (score >= 45) {
+    label = "Not Good";
+  } else {
+    label = "Don't Go";
+  }
+
+  // Hard caps based on offshore wave height
+  if (offshore > 1.0) return "Don't Go";
+  if (offshore > 0.5 && (label === "Perfect" || label === "Good")) {
+    label = "Fair";
+  }
+
+  // East wind and short period are extra bad for kayaks
+  if (windDir >= 45 && windDir <= 135 && period <= 6) {
+    if (label === "Perfect") label = "Not Good";
+    else if (label === "Good") label = "Not Good";
+    else if (label === "Fair") label = "Not Good";
+  }
+
+  return label;
 }
 
 /* ---------------------------
    Main Runner
 ---------------------------- */
 async function run() {
-
   console.log("Fetching marine & weather data...");
 
   const marine = await safeFetch(
@@ -193,7 +303,6 @@ async function run() {
   const data = {};
 
   for (let i = 0; i < marine.hourly.time.length; i++) {
-
     const [date, time] = marine.hourly.time[i].split("T");
     const hour = parseInt(time.split(":")[0], 10);
 
@@ -202,7 +311,7 @@ async function run() {
         wave: 0,
         period: 0,
         wind: 0,
-        windDir: 0,
+        windDirs: [],
         water: 0,
         air: 0,
         pressureStart: null,
@@ -220,7 +329,7 @@ async function run() {
       data[date].wave += marine.hourly.wave_height[i] * 3.28084;
       data[date].period += marine.hourly.wave_period[i];
       data[date].wind += weather.hourly.wind_speed_10m[i] * 0.621371;
-      data[date].windDir += weather.hourly.wind_direction_10m[i];
+      data[date].windDirs.push(weather.hourly.wind_direction_10m[i]);
       data[date].water += marine.hourly.sea_surface_temperature[i] * 9/5 + 32;
       data[date].air += weather.hourly.temperature_2m[i] * 9/5 + 32;
       data[date].count++;
@@ -228,44 +337,38 @@ async function run() {
   }
 
   for (const date of Object.keys(data).sort()) {
-
     const d = data[date];
     if (!d.count || d.pressureStart === null || d.pressureEnd === null) continue;
 
     const offshore = d.wave / d.count;
     const period = d.period / d.count;
-
-    const reduction = Math.max(0.3, 1.8 - (period * 0.15));
-    const surf = Math.max(0, offshore - reduction);
+    const surf = estimateSurfHeight(offshore, period);
 
     const wind = d.wind / d.count;
-    const windDir = d.windDir / d.count;
+    const windDir = averageWindDirection(d.windDirs);
     const water = d.water / d.count;
     const air = d.air / d.count;
     const comfort = water + air;
 
-    const pressureBonus = pressureTrendBonus(
-      d.pressureStart,
-      d.pressureEnd
-    );
+    const pressureBonus = pressureTrendBonus(d.pressureStart, d.pressureEnd);
 
     const fishScore = fishingScore(
-      surf, wind, water, windDir,
+      surf, offshore, period, wind, water, windDir,
       tideBonus, pressureBonus, air
     );
 
     const kayakScoreVal = kayakScore(
-      surf, period, wind, water, air, windDir
+      surf, offshore, period, wind, water, air, windDir
     );
 
-    const surfDisplay = surf < 1 ? "Flat" : `${surf.toFixed(1)} ft`;
+    const surfDisplay = surf < 1 ? `${surf.toFixed(1)} ft` : `${surf.toFixed(1)} ft`;
 
     console.log(
       `${date} | Surf: ${surfDisplay} | Offshore: ${offshore.toFixed(1)} ft @${period.toFixed(0)}s | ` +
       `Wind: ${wind.toFixed(0)}mph ${degToCardinal(windDir)} | ` +
       `Water: ${water.toFixed(0)}°F | Air: ${air.toFixed(0)}°F | ` +
-      `Fishing: ${fishingLabel(fishScore)} | ` +
-      `Kayak: ${kayakLabel(surf, comfort, kayakScoreVal)}`
+      `Fishing: ${fishingLabel(fishScore, offshore, period, windDir, wind)} | ` +
+      `Kayak: ${kayakLabel(surf, offshore, period, comfort, kayakScoreVal, windDir, wind)}`
     );
   }
 }
